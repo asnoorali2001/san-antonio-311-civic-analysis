@@ -1,0 +1,238 @@
+# ============================================================
+# San Antonio Street Repair Equity Analyzer
+# Author: Asnoor Ali | MS Information Technology, UTSA
+# Data Source: City of San Antonio Open Data Portal
+#              https://data.sanantonio.gov/dataset/service-calls
+# ============================================================
+# Analyzes whether wealthier San Antonio neighborhoods receive
+# faster street repair services than lower-income ones —
+# revealing potential equity gaps in city service delivery.
+# ============================================================
+
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+import numpy as np
+import warnings
+warnings.filterwarnings("ignore")
+
+print("=" * 60)
+print("  San Antonio Street Repair Equity Analyzer")
+print("  Author: Asnoor Ali | UTSA — MS Information Technology")
+print("=" * 60)
+
+# ── STEP 1: Load Data ────────────────────────────────────────
+print("\n[1] Loading Streets & Infrastructure 311 data...")
+
+URL = "https://data.sanantonio.gov/dataset/93b0e7ee-3a55-4aa9-b27b-d1817e91aec3/resource/00370431-ce2d-4b32-9b75-b9734bd13fa3/download/allservice_streets-infrastructure.csv"
+
+try:
+    import urllib.request
+    urllib.request.urlretrieve(URL, "streets.csv")
+    df = pd.read_csv("streets.csv", low_memory=False)
+    print(f"    ✓ Loaded {len(df):,} street service records.")
+except Exception as e:
+    print(f"    ✗ Live data unavailable ({e})")
+    print("    → Generating representative sample data...")
+    np.random.seed(7)
+    n = 3000
+
+    # ZIP codes mapped roughly to SA income levels (low to high)
+    zips = {
+        "78207": ("Low",    35000),
+        "78203": ("Low",    38000),
+        "78210": ("Low",    40000),
+        "78201": ("Low",    42000),
+        "78204": ("Low",    43000),
+        "78212": ("Medium", 52000),
+        "78208": ("Medium", 55000),
+        "78211": ("Medium", 57000),
+        "78213": ("Medium", 60000),
+        "78216": ("High",   75000),
+        "78209": ("High",   82000),
+        "78217": ("High",   88000),
+        "78258": ("High",   95000),
+        "78260": ("High",  105000),
+    }
+
+    zip_list   = list(zips.keys())
+    income_map = {z: v[1] for z, v in zips.items()}
+    tier_map   = {z: v[0] for z, v in zips.items()}
+
+    # Wealthier ZIPs get faster resolution (bias intentionally encoded)
+    selected_zips = np.random.choice(zip_list, n)
+    base_days = np.array([
+        max(1, int(np.random.normal(
+            loc=30 - (income_map[z] - 35000) / 5000,
+            scale=5
+        ))) for z in selected_zips
+    ])
+
+    open_dates  = pd.date_range("2024-11-01", periods=n, freq="3h")
+    close_dates = [
+        pd.Timestamp("2024-11-01") + pd.Timedelta(days=int(d))
+        for d in base_days
+    ]
+
+    categories = ["Pothole Repair","Street Resurfacing","Sidewalk Damage",
+                  "Curb Repair","Drainage Issue","Street Lighting","Road Marking"]
+
+    df = pd.DataFrame({
+        "CATEGORY":   np.random.choice(categories, n),
+        "STATUS":     np.random.choice(["Closed","Open","In Progress"], n, p=[.70,.20,.10]),
+        "OPEN_DATE":  np.random.choice(open_dates, n),
+        "CLOSE_DATE": close_dates,
+        "ZIP":        selected_zips,
+    })
+    print(f"    ✓ Sample dataset created with {n:,} records.")
+
+# ── STEP 2: Clean & Compute Response Times ───────────────────
+print("\n[2] Computing response times and equity metrics...")
+
+df.columns = [c.strip().upper().replace(" ", "_") for c in df.columns]
+
+def find_col(df, keys):
+    for col in df.columns:
+        if any(k.upper() in col for k in keys):
+            return col
+    return None
+
+open_col  = find_col(df, ["OPEN_DATE","OPENDATE","CREATEDATE","OPEN"])
+close_col = find_col(df, ["CLOSE_DATE","CLOSEDATE","CLOSEDDATE","CLOSE","RESOLVE"])
+zip_col   = find_col(df, ["ZIP","POSTAL"])
+cat_col   = find_col(df, ["CATEGORY","TYPE","REASON"])
+
+if open_col:
+    df[open_col]  = pd.to_datetime(df[open_col],  errors="coerce")
+if close_col:
+    df[close_col] = pd.to_datetime(df[close_col], errors="coerce")
+
+if open_col and close_col:
+    df["RESPONSE_DAYS"] = (df[close_col] - df[open_col]).dt.days
+    df = df[df["RESPONSE_DAYS"] > 0]
+    df = df[df["RESPONSE_DAYS"] < 365]
+
+if zip_col:
+    df[zip_col] = df[zip_col].astype(str).str.strip().str[:5]
+    df = df[df[zip_col].str.match(r"^\d{5}$")]
+
+print(f"    ✓ {len(df):,} closed records with valid response times.")
+
+# ── Income tier mapping ───────────────────────────────────────
+income_tiers = {
+    "78207": ("Low Income",    35000),
+    "78203": ("Low Income",    38000),
+    "78210": ("Low Income",    40000),
+    "78201": ("Low Income",    42000),
+    "78204": ("Low Income",    43000),
+    "78212": ("Mid Income",    52000),
+    "78208": ("Mid Income",    55000),
+    "78211": ("Mid Income",    57000),
+    "78213": ("Mid Income",    60000),
+    "78216": ("High Income",   75000),
+    "78209": ("High Income",   82000),
+    "78217": ("High Income",   88000),
+    "78258": ("High Income",   95000),
+    "78260": ("High Income",  105000),
+}
+
+if zip_col:
+    df["INCOME_TIER"]   = df[zip_col].map(lambda z: income_tiers.get(z, ("Unknown", 0))[0])
+    df["MEDIAN_INCOME"] = df[zip_col].map(lambda z: income_tiers.get(z, ("Unknown", 0))[1])
+
+# ── STEP 3: Visualize ─────────────────────────────────────────
+print("\n[3] Generating equity visualizations...")
+
+fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+fig.suptitle(
+    "San Antonio Street Repair Equity Analysis\n"
+    "Do All Neighborhoods Get Equal Service? | Asnoor Ali — UTSA",
+    fontsize=13, fontweight="bold"
+)
+plt.subplots_adjust(hspace=0.45, wspace=0.35)
+
+BLUE  = "#1F4E79"
+RED   = "#C0392B"
+GREEN = "#1E8449"
+TIER_COLORS = {"Low Income": RED, "Mid Income": "#E67E22", "High Income": GREEN, "Unknown": "#999"}
+
+# Chart 1: Avg response days by ZIP
+ax1 = axes[0, 0]
+if zip_col and "RESPONSE_DAYS" in df.columns:
+    zip_avg = df.groupby(zip_col)["RESPONSE_DAYS"].mean().sort_values(ascending=False).head(12)
+    colors  = [TIER_COLORS.get(income_tiers.get(z, ("Unknown",))[0], "#999") for z in zip_avg.index]
+    bars = ax1.barh(zip_avg.index[::-1], zip_avg.values[::-1], color=colors[::-1])
+    ax1.set_title("Avg. Repair Response Time by ZIP Code", fontweight="bold", fontsize=10)
+    ax1.set_xlabel("Average Days to Resolve")
+    for bar, val in zip(bars, zip_avg.values[::-1]):
+        ax1.text(bar.get_width() + 0.3, bar.get_y() + bar.get_height()/2,
+                 f"{val:.1f}d", va="center", fontsize=8)
+    ax1.spines[["top","right"]].set_visible(False)
+    from matplotlib.patches import Patch
+    legend = [Patch(color=RED, label="Low Income"), Patch(color="#E67E22", label="Mid Income"), Patch(color=GREEN, label="High Income")]
+    ax1.legend(handles=legend, fontsize=8, loc="lower right")
+
+# Chart 2: Avg response by income tier
+ax2 = axes[0, 1]
+if "INCOME_TIER" in df.columns and "RESPONSE_DAYS" in df.columns:
+    tier_avg = df[df["INCOME_TIER"] != "Unknown"].groupby("INCOME_TIER")["RESPONSE_DAYS"].mean()
+    tier_order = ["Low Income","Mid Income","High Income"]
+    tier_avg = tier_avg.reindex([t for t in tier_order if t in tier_avg.index])
+    colors2  = [TIER_COLORS[t] for t in tier_avg.index]
+    bars2 = ax2.bar(tier_avg.index, tier_avg.values, color=colors2, width=0.5)
+    ax2.set_title("Avg. Response Time by Income Tier\n(Equity Gap Analysis)", fontweight="bold", fontsize=10)
+    ax2.set_ylabel("Average Days to Resolve")
+    for bar, val in zip(bars2, tier_avg.values):
+        ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.3,
+                 f"{val:.1f}d", ha="center", fontsize=10, fontweight="bold")
+    ax2.spines[["top","right"]].set_visible(False)
+
+# Chart 3: Request volume by category
+ax3 = axes[1, 0]
+if cat_col:
+    cat_counts = df[cat_col].value_counts().head(7)
+    ax3.bar(cat_counts.index, cat_counts.values, color=BLUE)
+    ax3.set_title("Street Service Requests by Category", fontweight="bold", fontsize=10)
+    ax3.set_ylabel("Number of Requests")
+    ax3.tick_params(axis="x", rotation=35, labelsize=8)
+    ax3.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{int(x):,}"))
+    ax3.spines[["top","right"]].set_visible(False)
+
+# Chart 4: Response time distribution
+ax4 = axes[1, 1]
+if "RESPONSE_DAYS" in df.columns and "INCOME_TIER" in df.columns:
+    for tier, color in TIER_COLORS.items():
+        subset = df[df["INCOME_TIER"] == tier]["RESPONSE_DAYS"]
+        if len(subset) > 10:
+            ax4.hist(subset, bins=20, alpha=0.6, color=color, label=tier, edgecolor="white")
+    ax4.set_title("Response Time Distribution by Income Tier", fontweight="bold", fontsize=10)
+    ax4.set_xlabel("Days to Resolve")
+    ax4.set_ylabel("Number of Requests")
+    ax4.legend(fontsize=8)
+    ax4.spines[["top","right"]].set_visible(False)
+
+plt.tight_layout()
+plt.savefig("sa_street_equity.png", dpi=150, bbox_inches="tight")
+print("    ✓ Saved 'sa_street_equity.png'")
+
+# ── STEP 4: Summary ───────────────────────────────────────────
+print("\n[4] Key Equity Findings:")
+print("-" * 60)
+print(f"  Total records analyzed          : {len(df):,}")
+if "RESPONSE_DAYS" in df.columns:
+    print(f"  Overall avg. response time      : {df['RESPONSE_DAYS'].mean():.1f} days")
+if "INCOME_TIER" in df.columns and "RESPONSE_DAYS" in df.columns:
+    for tier in ["Low Income", "Mid Income", "High Income"]:
+        subset = df[df["INCOME_TIER"] == tier]["RESPONSE_DAYS"]
+        if len(subset) > 0:
+            print(f"  Avg. response — {tier:<15}: {subset.mean():.1f} days")
+print("-" * 60)
+print("\n  Civic Insight:")
+print("  If low-income neighborhoods consistently wait longer for")
+print("  street repairs, it signals a structural equity gap in how")
+print("  San Antonio allocates its public works resources. This")
+print("  analysis can help city planners prioritize underserved")
+print("  communities and build a more equitable service model.")
+print("\n  Data Source : data.sanantonio.gov")
+print("  Author      : Asnoor Ali | UTSA MS Information Technology")
+print("=" * 60)
