@@ -1,0 +1,198 @@
+# ============================================================
+# San Antonio 311 Service Calls — Civic Data Analysis
+# Author: Asnoor Ali | MS Information Technology, UTSA
+# Data Source: City of San Antonio Open Data Portal
+#              https://data.sanantonio.gov/dataset/service-calls
+# ============================================================
+# This script analyzes real San Antonio 311 service request data
+# to uncover patterns in how city services are distributed across
+# the community — supporting more equitable, data-driven decisions.
+# ============================================================
+
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+from collections import Counter
+import warnings
+warnings.filterwarnings("ignore")
+
+# ── STEP 1: Load Real San Antonio 311 Data ──────────────────
+print("=" * 60)
+print("  San Antonio 311 Civic Data Analysis")
+print("  Author: Asnoor Ali | UTSA — MS Information Technology")
+print("=" * 60)
+print("\n[1] Loading San Antonio 311 service call data...")
+
+URL = "https://data.sanantonio.gov/dataset/93b0e7ee-3a55-4aa9-b27b-d1817e91aec3/resource/20eb6d22-7eac-425a-85c1-fdb365fd3cd7/download/allservicecalls.csv"
+
+import urllib.request
+try:
+    urllib.request.urlretrieve(URL, "allservicecalls.csv")
+    df = pd.read_csv("allservicecalls.csv", low_memory=False)
+    print(f"    ✓ Loaded {len(df):,} service call records successfully.")
+except Exception as e:
+    print(f"    ✗ Live download unavailable ({e})")
+    print("    → Generating representative sample data (same structure as real dataset)...")
+    import numpy as np
+    np.random.seed(42)
+    n = 5000
+    categories = [
+        "Solid Waste","Streets & Infrastructure","Property Maintenance",
+        "Graffiti Abatement","Animal Care","Parks & Recreation",
+        "Traffic Signals","Health & Sanitation","Code Compliance","Stray Animals"
+    ]
+    statuses = ["Closed","Open","In Progress","Pending","Cancelled"]
+    zips = ["78201","78202","78203","78204","78205","78207","78208",
+            "78209","78210","78211","78212","78213","78214","78216","78217"]
+    dates = pd.date_range("2025-03-01", periods=n, freq="2h")
+    df = pd.DataFrame({
+        "CATEGORY":  np.random.choice(categories, n, p=[.22,.18,.14,.10,.09,.08,.07,.05,.04,.03]),
+        "STATUS":    np.random.choice(statuses,   n, p=[.55,.20,.12,.08,.05]),
+        "OPEN_DATE": np.random.choice(dates, n),
+        "ZIP":       np.random.choice(zips,       n, p=[.12,.10,.09,.08,.08,.07,.07,.07,.07,.06,.05,.05,.04,.03,.02]),
+        "DEPT":      np.random.choice(["Solid Waste Mgmt","Public Works","Dev Services","Animal Care","Parks & Rec"], n)
+    })
+    print(f"    ✓ Sample dataset created with {n:,} records.")
+
+# ── STEP 2: Inspect & Clean ─────────────────────────────────
+print("\n[2] Cleaning and preparing data...")
+
+# Standardize column names
+df.columns = [c.strip().upper().replace(" ", "_") for c in df.columns]
+
+# Show available columns
+print(f"    Columns found: {list(df.columns)}")
+
+# Identify key columns flexibly
+def find_col(df, keywords):
+    for col in df.columns:
+        if any(k.upper() in col for k in keywords):
+            return col
+    return None
+
+category_col  = find_col(df, ["CATEGORY", "TYPE", "REASON", "SERVICE"])
+status_col    = find_col(df, ["STATUS", "STATE"])
+open_date_col = find_col(df, ["OPENDATE", "OPEN_DATE", "CREATEDATE", "OPEN"])
+zip_col       = find_col(df, ["ZIP", "POSTAL"])
+dept_col      = find_col(df, ["DEPT", "DEPARTMENT", "DIVISION"])
+
+print(f"    ✓ Using: category='{category_col}', status='{status_col}', date='{open_date_col}', zip='{zip_col}'")
+
+# Drop rows missing critical fields
+critical = [c for c in [category_col, status_col] if c]
+df.dropna(subset=critical, inplace=True)
+print(f"    ✓ {len(df):,} records after cleaning.")
+
+# Parse dates
+if open_date_col:
+    df[open_date_col] = pd.to_datetime(df[open_date_col], errors="coerce")
+    df["MONTH"] = df[open_date_col].dt.to_period("M").astype(str)
+    df["WEEKDAY"] = df[open_date_col].dt.day_name()
+
+# ── STEP 3: Analysis ────────────────────────────────────────
+print("\n[3] Running civic data analysis...")
+
+fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+fig.suptitle(
+    "San Antonio 311 Service Calls — Civic Data Analysis\nAsnoor Ali | UTSA MS Information Technology",
+    fontsize=13, fontweight="bold", y=1.01
+)
+plt.subplots_adjust(hspace=0.45, wspace=0.35)
+
+BLUE   = "#1F4E79"
+TEAL   = "#2E86AB"
+COLORS = ["#1F4E79", "#2E86AB", "#3AAFA9", "#5FAD56", "#F2C14E",
+          "#F78154", "#B4436C", "#6B4226", "#7B2D8B", "#2D6A4F"]
+
+# ── Chart 1: Top 10 Service Request Categories ──
+ax1 = axes[0, 0]
+if category_col:
+    top_cats = df[category_col].value_counts().head(10)
+    bars = ax1.barh(top_cats.index[::-1], top_cats.values[::-1], color=BLUE)
+    ax1.set_title("Top 10 Service Request Categories", fontweight="bold", fontsize=10)
+    ax1.set_xlabel("Number of Requests")
+    ax1.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{int(x):,}"))
+    for bar, val in zip(bars, top_cats.values[::-1]):
+        ax1.text(bar.get_width() + max(top_cats.values)*0.01, bar.get_y() + bar.get_height()/2,
+                 f"{val:,}", va="center", fontsize=7, color="#333")
+    ax1.spines[["top","right"]].set_visible(False)
+
+# ── Chart 2: Request Status Breakdown ──
+ax2 = axes[0, 1]
+if status_col:
+    status_counts = df[status_col].value_counts().head(6)
+    wedges, texts, autotexts = ax2.pie(
+        status_counts.values,
+        labels=status_counts.index,
+        autopct="%1.1f%%",
+        colors=COLORS[:len(status_counts)],
+        startangle=140,
+        textprops={"fontsize": 8}
+    )
+    ax2.set_title("Service Request Status Breakdown", fontweight="bold", fontsize=10)
+
+# ── Chart 3: Monthly Volume Trend ──
+ax3 = axes[1, 0]
+if open_date_col and "MONTH" in df.columns:
+    monthly = df.groupby("MONTH").size().reset_index(name="COUNT")
+    monthly = monthly[monthly["MONTH"] != "NaT"].tail(12)
+    ax3.plot(monthly["MONTH"], monthly["COUNT"], marker="o", color=TEAL, linewidth=2, markersize=5)
+    ax3.fill_between(monthly["MONTH"], monthly["COUNT"], alpha=0.15, color=TEAL)
+    ax3.set_title("Monthly Service Request Volume (Last 12 Months)", fontweight="bold", fontsize=10)
+    ax3.set_xlabel("Month")
+    ax3.set_ylabel("Number of Requests")
+    ax3.tick_params(axis="x", rotation=45, labelsize=7)
+    ax3.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{int(x):,}"))
+    ax3.spines[["top","right"]].set_visible(False)
+
+# ── Chart 4: Top 10 ZIP Codes by Volume (Equity Lens) ──
+ax4 = axes[1, 1]
+if zip_col:
+    df[zip_col] = df[zip_col].astype(str).str.strip().str[:5]
+    top_zips = df[zip_col].value_counts().head(10)
+    valid_zips = top_zips[top_zips.index.str.match(r"^\d{5}$")]
+    bars4 = ax4.bar(valid_zips.index, valid_zips.values, color=COLORS[:len(valid_zips)])
+    ax4.set_title("Top 10 ZIP Codes by Service Requests\n(Community Equity Lens)", fontweight="bold", fontsize=10)
+    ax4.set_xlabel("ZIP Code")
+    ax4.set_ylabel("Number of Requests")
+    ax4.tick_params(axis="x", rotation=45, labelsize=8)
+    ax4.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{int(x):,}"))
+    ax4.spines[["top","right"]].set_visible(False)
+
+plt.tight_layout()
+plt.savefig("sa_311_analysis.png", dpi=150, bbox_inches="tight")
+print("    ✓ Visualization saved as 'sa_311_analysis.png'")
+
+# ── STEP 4: Print Summary Insights ──────────────────────────
+print("\n[4] Key Civic Insights:")
+print("-" * 60)
+print(f"  Total service requests analyzed : {len(df):,}")
+
+if category_col:
+    top1 = df[category_col].value_counts().idxmax()
+    top1_count = df[category_col].value_counts().max()
+    print(f"  Most common request type        : {top1} ({top1_count:,} calls)")
+
+if status_col:
+    open_pct = (df[status_col].str.upper().str.contains("OPEN|PENDING", na=False).sum() / len(df)) * 100
+    print(f"  Requests still open/pending     : {open_pct:.1f}%")
+
+if zip_col:
+    top_zip = df[zip_col].value_counts().idxmax()
+    top_zip_n = df[zip_col].value_counts().max()
+    print(f"  Highest need ZIP code           : {top_zip} ({top_zip_n:,} requests)")
+
+if open_date_col and "WEEKDAY" in df.columns:
+    busiest_day = df["WEEKDAY"].value_counts().idxmax()
+    print(f"  Busiest day for service calls   : {busiest_day}")
+
+print("-" * 60)
+print("\n  Civic Insight:")
+print("  ZIP code distribution reveals which neighborhoods submit")
+print("  the most service requests — a proxy for where infrastructure")
+print("  gaps and resource needs are most concentrated in San Antonio.")
+print("  This data can help city planners allocate services more")
+print("  equitably across underserved communities.")
+print("\n  Data Source : data.sanantonio.gov (Open Data SA)")
+print("  Author      : Asnoor Ali | UTSA MS Information Technology")
+print("=" * 60)
