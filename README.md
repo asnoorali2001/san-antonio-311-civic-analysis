@@ -1,2 +1,2 @@
-# san-antonio-311-civic-analysis
-Analyzes San Antonio's real 311 service call open data to identify infrastructure gaps, service request patterns, and neighborhood equity insights across ZIP codes. Built using Python, Pandas, and Matplotlib. Data source: data.sanantonio.gov
+# san-antonio-civic-data-analysis
+A collection of civic data analysis projects using real San Antonio open data. Explores service equity, workforce gaps, and urban blight patterns to support better city decision-making. Tools: Python, Pandas, Matplotlib, Scikit-learn.
